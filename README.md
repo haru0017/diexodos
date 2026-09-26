@@ -87,7 +87,7 @@ Terminal states stutter forever, so a system that halts in a bad state is caught
 
 ## States with slices or maps
 
-State identity for comparable states is Go equality, and states holding slices go through `dex.RunKeyed` with an injective canonical key, so two distinct states are never conflated the way hash-only identities can be. `dexgen` writes the key for you:
+State identity for comparable states is Go equality. States holding slices go through `dex.RunKeyed` with a canonical key, which `dexgen` writes for you:
 
 ```go
 //go:generate go run github.com/haru0017/diexodos/cmd/dexgen -type State
@@ -100,7 +100,7 @@ type State struct {
 res := dex.RunKeyed(spec, State.DexKey)
 ```
 
-The generated `DexKey` is reflection free and rejects fields it cannot encode canonically, such as pointers and maps, at generation time.
+Fields that cannot be encoded canonically, such as pointers and maps, are rejected when the code is generated.
 
 ## Actor layer
 
