@@ -87,7 +87,7 @@ Terminal states stutter forever, so a system that halts in a bad state is caught
 
 ## States with slices or maps
 
-State identity for comparable states is Go equality. States holding slices go through `dex.RunKeyed` with an injective canonical key, which `dexgen` writes for you:
+State identity for comparable states is Go equality, and states holding slices go through `dex.RunKeyed` with an injective canonical key, so two distinct states are never conflated the way hash-only identities can be. `dexgen` writes the key for you:
 
 ```go
 //go:generate go run github.com/haru0017/diexodos/cmd/dexgen -type State
@@ -137,11 +137,3 @@ Machine states and messages must be plain values: booleans, numbers, strings, an
 - `examples/diehard`: the water jug puzzle. The claim that the big jug never holds 4 gallons is disproven, and the counterexample is the solution.
 - `examples/peterson`: Peterson's algorithm proven safe across all interleavings, and the classic bug of taking the turn for yourself caught.
 - `examples/msgslot`: the same slot race through mailboxes, and a try-take variant proven safe with a liveness property under fair delivery.
-
-## How it works
-
-Exploration is breadth first over the graph of reachable states, so the first counterexample found is a shortest one. State identity is exact: comparable states are their own map key and keyed states use an injective encoding, so two distinct states are never conflated by a hash collision.
-
-Liveness checking totalizes the graph with stuttering self-loops and searches strongly connected components for a violating cycle. A component is accepted only if a closed walk covering it satisfies every fairness declaration: a weakly fair action must be taken inside the component or disabled somewhere in it, and a strongly fair action must be taken inside it or enabled nowhere, with the enabling states pruned and the search repeated otherwise. The reported lasso visits every witness that argument needs.
-
-The engine lives in an internal package behind the small `dex` surface.
