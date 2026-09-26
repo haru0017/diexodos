@@ -1,32 +1,34 @@
 // Package engine implements exhaustive breadth-first exploration of a state
-// space defined by transition rules. States must be comparable so that Go
-// equality is the state identity, which rules out hash-collision unsoundness
-// by construction.
+// space defined by transition rules. State identity is delegated to a key
+// function mapping states to a comparable key, so equality is exact and
+// hash-collision unsoundness is ruled out by construction.
 package engine
 
 // Rule produces the successor states reachable from a state in one step.
-// A rule that is not enabled in a state returns no successors.
-type Rule[S comparable] struct {
+// A rule that is not enabled in a state returns no successors. Fair marks
+// the rule as weakly fair for liveness checking.
+type Rule[S any] struct {
 	Name string
+	Fair bool
 	Next func(S) []S
 }
 
 // Invariant is a predicate that must hold in every reachable state.
-type Invariant[S comparable] struct {
+type Invariant[S any] struct {
 	Name  string
 	Holds func(S) bool
 }
 
 // Step is one entry of a counterexample path. Rule is empty for an initial
 // state.
-type Step[S comparable] struct {
+type Step[S any] struct {
 	Rule  string
 	State S
 }
 
 // Violation is an invariant failure together with a shortest path from an
 // initial state to the failing state.
-type Violation[S comparable] struct {
+type Violation[S any] struct {
 	Invariant string
 	Path      []Step[S]
 }
@@ -38,39 +40,62 @@ type Options struct {
 	// Progress, if set, is called every ProgressEvery discovered states.
 	Progress      func(states int)
 	ProgressEvery int
+	// DetectDeadlocks reports a state with no successors as a violation.
+	DetectDeadlocks bool
+	// BuildGraph records the full edge list for liveness checking.
+	BuildGraph bool
 }
 
-type Result[S comparable] struct {
+type Result[S any] struct {
 	States    int
 	Violation *Violation[S]
 	Truncated bool
 }
 
-type origin[S comparable] struct {
-	prev    S
-	rule    string
-	initial bool
+// Graph is the explored state graph, produced when Options.BuildGraph is set
+// and exploration completes without a violation.
+type Graph[S any] struct {
+	States []S
+	Origin []Origin
+	Edges  [][]Edge
+	Rules  []Rule[S]
+}
+
+// Origin records how a state was first reached. Prev is -1 for an initial
+// state.
+type Origin struct {
+	Prev int
+	Rule int
+}
+
+// Edge is a labeled transition between state ids. Rule is -1 for the
+// stuttering self-loop added to terminal states.
+type Edge struct {
+	To   int
+	Rule int
 }
 
 // Explore walks every state reachable from init through rules, checking invs
 // on each state. It stops at the first violation, which BFS makes a shortest
 // counterexample.
-func Explore[S comparable](init []S, rules []Rule[S], invs []Invariant[S], opts Options) Result[S] {
+func Explore[S any, K comparable](init []S, rules []Rule[S], invs []Invariant[S], key func(S) K, opts Options) (Result[S], *Graph[S]) {
 	progressEvery := opts.ProgressEvery
 	if progressEvery <= 0 {
 		progressEvery = 1 << 15
 	}
 
-	visited := make(map[S]origin[S])
-	var queue []S
+	g := &Graph[S]{Rules: rules}
+	index := make(map[K]int)
+	var queue []int
 	var res Result[S]
 
-	check := func(s S) bool {
+	check := func(id int) bool {
+		s := g.States[id]
 		for _, inv := range invs {
 			if !inv.Holds(s) {
 				res.Violation = &Violation[S]{
 					Invariant: inv.Name,
-					Path:      buildPath(visited, s),
+					Path:      g.path(id),
 				}
 				return true
 			}
@@ -78,55 +103,84 @@ func Explore[S comparable](init []S, rules []Rule[S], invs []Invariant[S], opts 
 		return false
 	}
 
+	admit := func(s S, prev, rule int) (int, bool) {
+		k := key(s)
+		if id, ok := index[k]; ok {
+			return id, false
+		}
+		id := len(g.States)
+		index[k] = id
+		g.States = append(g.States, s)
+		g.Origin = append(g.Origin, Origin{Prev: prev, Rule: rule})
+		if opts.BuildGraph {
+			g.Edges = append(g.Edges, nil)
+		}
+		res.States++
+		if opts.Progress != nil && res.States%progressEvery == 0 {
+			opts.Progress(res.States)
+		}
+		return id, true
+	}
+
 	for _, s := range init {
-		if _, ok := visited[s]; ok {
+		id, fresh := admit(s, -1, -1)
+		if !fresh {
 			continue
 		}
-		visited[s] = origin[S]{initial: true}
-		res.States++
-		if check(s) {
-			return res
+		if check(id) {
+			return res, nil
 		}
-		queue = append(queue, s)
+		queue = append(queue, id)
 	}
 
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
-		for _, r := range rules {
-			for _, next := range r.Next(cur) {
-				if _, ok := visited[next]; ok {
+		successors := 0
+		for ri, r := range rules {
+			for _, next := range r.Next(g.States[cur]) {
+				successors++
+				if opts.MaxStates > 0 && res.States >= opts.MaxStates {
+					if _, exists := index[key(next)]; !exists {
+						res.Truncated = true
+						return res, nil
+					}
+				}
+				id, fresh := admit(next, cur, ri)
+				if opts.BuildGraph {
+					g.Edges[cur] = append(g.Edges[cur], Edge{To: id, Rule: ri})
+				}
+				if !fresh {
 					continue
 				}
-				if opts.MaxStates > 0 && res.States >= opts.MaxStates {
-					res.Truncated = true
-					return res
+				if check(id) {
+					return res, nil
 				}
-				visited[next] = origin[S]{prev: cur, rule: r.Name}
-				res.States++
-				if opts.Progress != nil && res.States%progressEvery == 0 {
-					opts.Progress(res.States)
-				}
-				if check(next) {
-					return res
-				}
-				queue = append(queue, next)
+				queue = append(queue, id)
 			}
 		}
+		if successors == 0 && opts.DetectDeadlocks {
+			res.Violation = &Violation[S]{Invariant: "deadlock", Path: g.path(cur)}
+			return res, nil
+		}
 	}
-	return res
+
+	if !opts.BuildGraph {
+		return res, nil
+	}
+	return res, g
 }
 
-func buildPath[S comparable](visited map[S]origin[S], last S) []Step[S] {
+func (g *Graph[S]) path(id int) []Step[S] {
 	var rev []Step[S]
-	cur := last
-	for {
-		o := visited[cur]
-		rev = append(rev, Step[S]{Rule: o.rule, State: cur})
-		if o.initial {
-			break
+	for cur := id; cur >= 0; {
+		o := g.Origin[cur]
+		name := ""
+		if o.Rule >= 0 {
+			name = g.Rules[o.Rule].Name
 		}
-		cur = o.prev
+		rev = append(rev, Step[S]{Rule: name, State: g.States[cur]})
+		cur = o.Prev
 	}
 	path := make([]Step[S], len(rev))
 	for i, s := range rev {
