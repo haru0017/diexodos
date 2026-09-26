@@ -108,6 +108,24 @@ func TestLivenessNeedsFairness(t *testing.T) {
 	Check(t, spinnerSpec(true))
 }
 
+func TestEmptyInitPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected a panic: an empty spec must not pass vacuously")
+		}
+	}()
+	Run(Spec[int]{})
+}
+
+func TestIncompleteActionPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected a panic for an action without Update or Multi")
+		}
+	}()
+	Run(Spec[int]{Init: []int{0}, Actions: []Action[int]{{Name: "empty"}}})
+}
+
 func TestDetectDeadlocks(t *testing.T) {
 	spec := counterSpec(10)
 	res := Run(spec, DetectDeadlocks())

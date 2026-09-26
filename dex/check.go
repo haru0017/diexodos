@@ -99,6 +99,16 @@ func Run[S comparable](spec Spec[S], opts ...Option) Result[S] {
 // treated as the same state, so key must be injective on the reachable
 // states.
 func RunKeyed[S any, K comparable](spec Spec[S], key func(S) K, opts ...Option) Result[S] {
+	// An empty spec would report success without checking anything.
+	if len(spec.Init) == 0 {
+		panic("dex: spec has no initial states")
+	}
+	for _, a := range spec.Actions {
+		if a.Update == nil && a.Multi == nil {
+			panic(fmt.Sprintf("dex: action %q has neither Update nor Multi", a.Name))
+		}
+	}
+
 	var c config
 	for _, o := range opts {
 		o(&c)
