@@ -59,7 +59,7 @@ invariant "mutual exclusion" violated:
    4. take(2): {Saw:[false true true] Holds:[false true true]}
 ```
 
-Counterexamples are also useful on their own. `examples/diehard` states that the big jug never holds 4 gallons, and the counterexample is the solution to the puzzle.
+Counterexamples are also useful on their own. `examples/diehard` states that the big jug never holds 4 gallons, and the counterexample is the solution to the puzzle. `examples/peterson` proves Peterson's algorithm safe across all interleavings and catches the classic bug of taking the turn for yourself.
 
 ## API
 
