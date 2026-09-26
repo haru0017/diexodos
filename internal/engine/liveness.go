@@ -214,6 +214,9 @@ func buildLasso[S any](g *Graph[S], p Liveness[S], comp []int, in map[int]bool, 
 				queue = append(queue, e.To)
 			}
 		}
+		if !seen[to] {
+			panic("engine: lasso target unreachable inside its component")
+		}
 		var rev []edgeAt
 		for at := to; at != cur; {
 			pe := prev[at]

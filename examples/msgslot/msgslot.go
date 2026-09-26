@@ -38,12 +38,12 @@ func System(atomicTake bool) *actor.System {
 			}
 			return m
 		})
-		for _, r := range []string{"r1", "r2"} {
+		for id, r := range []string{"r1", "r2"} {
 			actor.On(s, r, func(m Runner, _ Granted, _ *actor.Ctx) Runner {
 				m.Holding = true
 				return m
 			})
-			actor.Post(s, "slot", TryTake{From: r, ID: map[string]int{"r1": 1, "r2": 2}[r]})
+			actor.Post(s, "slot", TryTake{From: r, ID: id + 1})
 		}
 	} else {
 		actor.On(s, "slot", func(m Slot, msg IsFree, ctx *actor.Ctx) Slot {
