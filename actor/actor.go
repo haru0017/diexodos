@@ -18,6 +18,11 @@ type handler struct {
 	fn      func(m, msg any, ctx *Ctx) any
 }
 
+type deferRule struct {
+	msgType reflect.Type
+	while   func(m any) bool
+}
+
 type post struct {
 	to  string
 	msg any
@@ -29,6 +34,7 @@ type System struct {
 	names    []string
 	initial  map[string]any
 	handlers map[string][]handler
+	defers   map[string][]deferRule
 	posts    []post
 	loss     bool
 	reorder  bool
@@ -73,6 +79,7 @@ func NewSystem(opts ...SystemOption) *System {
 	s := &System{
 		initial:  make(map[string]any),
 		handlers: make(map[string][]handler),
+		defers:   make(map[string][]deferRule),
 	}
 	for _, o := range opts {
 		o(s)
@@ -105,6 +112,22 @@ func On[M, Msg any](s *System, name string, fn func(M, Msg, *Ctx) M) {
 		fn: func(m, msg any, ctx *Ctx) any {
 			return fn(m.(M), msg.(Msg), ctx)
 		},
+	})
+}
+
+// Defer keeps messages of type Msg queued while the predicate holds on the
+// machine state. Deferred messages keep their position and later messages are
+// delivered past them, like the defer keyword in P.
+func Defer[M, Msg any](s *System, name string, while func(M) bool) {
+	if _, ok := s.initial[name]; !ok {
+		panic(fmt.Sprintf("actor: machine %q not spawned", name))
+	}
+	var msg Msg
+	mt := reflect.TypeOf(msg)
+	mustBePlain(mt)
+	s.defers[name] = append(s.defers[name], deferRule{
+		msgType: mt,
+		while:   func(m any) bool { return while(m.(M)) },
 	})
 }
 

@@ -126,6 +126,47 @@ func TestUnfairDeliveryAllowsStarvation(t *testing.T) {
 	}
 }
 
+type gate struct {
+	Ready       bool
+	Worked      bool
+	WorkedEarly bool
+}
+type work struct{}
+type ready struct{}
+
+func gateSystem(deferWork bool) *System {
+	s := NewSystem()
+	Spawn(s, "m", gate{})
+	On(s, "m", func(m gate, _ work, _ *Ctx) gate {
+		if !m.Ready {
+			m.WorkedEarly = true
+		}
+		m.Worked = true
+		return m
+	})
+	On(s, "m", func(m gate, _ ready, _ *Ctx) gate { m.Ready = true; return m })
+	if deferWork {
+		Defer[gate, work](s, "m", func(m gate) bool { return !m.Ready })
+	}
+	Post(s, "m", work{})
+	Post(s, "m", ready{})
+	s.Inv("never early", func(w Snapshot) bool { return !Machine[gate](w, "m").WorkedEarly })
+	return s
+}
+
+func TestDeferHoldsMessagesUntilReady(t *testing.T) {
+	res := Run(gateSystem(false))
+	if res.Violation == nil {
+		t.Fatal("without defer the work message arrives first")
+	}
+
+	s := gateSystem(true)
+	s.EventuallyAlways("worked", func(w Snapshot) bool {
+		return w.Quiet() && Machine[gate](w, "m").Worked
+	})
+	Check(t, s)
+}
+
 func TestUnhandledMessagePanics(t *testing.T) {
 	s := NewSystem()
 	Spawn(s, "m", counter{})

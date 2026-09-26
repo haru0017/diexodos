@@ -77,9 +77,35 @@ func (s *System) candidates(q []any) []int {
 	return idx
 }
 
+// deliverable returns the queue positions delivery may pick: the first
+// non-deferred message under FIFO, every non-deferred message under Reorder.
+func (s *System) deliverable(name string, m any, q []any) []int {
+	var idx []int
+	for i, msg := range q {
+		if s.isDeferred(name, m, msg) {
+			continue
+		}
+		idx = append(idx, i)
+		if !s.reorder {
+			break
+		}
+	}
+	return idx
+}
+
+func (s *System) isDeferred(name string, m, msg any) bool {
+	mt := reflect.TypeOf(msg)
+	for _, d := range s.defers[name] {
+		if d.msgType == mt && d.while(m) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *System) deliver(w Snapshot, name string) []Snapshot {
 	var out []Snapshot
-	for _, idx := range s.candidates(w.queues[name]) {
+	for _, idx := range s.deliverable(name, w.machines[name], w.queues[name]) {
 		msg := w.queues[name][idx]
 		mt := reflect.TypeOf(msg)
 		matched := false
