@@ -19,7 +19,7 @@ type Liveness[S any] struct {
 }
 
 // Lasso is a liveness counterexample: a finite prefix into a cycle that can
-// repeat forever under weak fairness.
+// repeat forever under the declared fairness.
 type Lasso[S any] struct {
 	Property string
 	Prefix   []Step[S]
@@ -27,22 +27,29 @@ type Lasso[S any] struct {
 }
 
 // CheckLiveness looks for a cycle violating one of the properties that is
-// consistent with weak fairness of the fair rules. It adds stuttering
-// self-loops to terminal states so that every behavior is infinite.
+// consistent with the fairness of the rules. It adds stuttering self-loops to
+// terminal states so that every behavior is infinite.
 //
 // A strongly connected component admits a fair violating cycle exactly when a
-// closed walk covering the component does: every fair rule must either be
-// taken on some internal edge or be disabled somewhere in the component.
+// closed walk covering it does. Weak fairness of a rule needs the rule taken
+// on some internal edge or disabled somewhere in the component; failing that,
+// every subcomponent fails too, so the component is rejected. Strong fairness
+// needs the rule taken or enabled nowhere; failing that, a subcomponent
+// avoiding the enabling states may still qualify, so those states are pruned
+// and the search recurses.
 func CheckLiveness[S any](g *Graph[S], props []Liveness[S]) *Lasso[S] {
 	for id := range g.States {
 		if len(g.Edges[id]) == 0 {
 			g.Edges[id] = append(g.Edges[id], Edge{To: id, Rule: -1})
 		}
 	}
-	var fair []int
+	var weak, strong []int
 	for i, r := range g.Rules {
 		if r.Fair {
-			fair = append(fair, i)
+			weak = append(weak, i)
+		}
+		if r.StrongFair {
+			strong = append(strong, i)
 		}
 	}
 
@@ -51,27 +58,58 @@ func CheckLiveness[S any](g *Graph[S], props []Liveness[S]) *Lasso[S] {
 		for id, s := range g.States {
 			holds[id] = p.Holds(s)
 		}
-		member := func(int) bool { return true }
-		if p.Mode == ModeAlwaysEventually {
-			// A violating cycle avoids the predicate entirely.
-			member = func(id int) bool { return !holds[id] }
+		nodes := make(map[int]bool, len(g.States))
+		for id := range g.States {
+			if p.Mode == ModeAlwaysEventually && holds[id] {
+				// A violating cycle avoids the predicate entirely.
+				continue
+			}
+			nodes[id] = true
 		}
-		for _, comp := range sccs(g, member) {
-			in := make(map[int]bool, len(comp))
+		accept := func([]int) bool { return true }
+		if p.Mode == ModeEventuallyAlways {
+			accept = func(comp []int) bool { return !allHold(comp, holds) }
+		}
+		if comp := searchFair(g, nodes, weak, strong, accept); comp != nil {
+			return buildLasso(g, p, comp, weak, strong, holds)
+		}
+	}
+	return nil
+}
+
+// searchFair returns a component of the subgraph induced by nodes that has an
+// internal edge, satisfies accept, and admits a fair covering walk.
+func searchFair[S any](g *Graph[S], nodes map[int]bool, weak, strong []int, accept func([]int) bool) []int {
+	member := func(id int) bool { return nodes[id] }
+	for _, comp := range sccs(g, member) {
+		in := make(map[int]bool, len(comp))
+		for _, id := range comp {
+			in[id] = true
+		}
+		if !hasInternalEdge(g, comp, in) {
+			continue
+		}
+		if !accept(comp) {
+			continue
+		}
+		if !weaklyFairComponent(g, comp, in, weak) {
+			// Weak fairness failure is monotone under pruning: the rule stays
+			// enabled everywhere and untaken in every subcomponent.
+			continue
+		}
+		if bad := unsatisfiedStrong(g, comp, in, strong); bad >= 0 {
+			pruned := make(map[int]bool, len(comp))
 			for _, id := range comp {
-				in[id] = true
+				if len(g.Rules[bad].Next(g.States[id])) == 0 {
+					pruned[id] = true
+				}
 			}
-			if !hasInternalEdge(g, comp, in) {
-				continue
+			if sub := searchFair(g, pruned, weak, strong, accept); sub != nil {
+				return sub
 			}
-			if p.Mode == ModeEventuallyAlways && allHold(comp, holds) {
-				continue
-			}
-			if !fairComponent(g, comp, in, fair) {
-				continue
-			}
-			return buildLasso(g, p, comp, in, fair, holds)
+			continue
 		}
+		return comp
 	}
 	return nil
 }
@@ -96,36 +134,50 @@ func allHold(comp []int, holds []bool) bool {
 	return true
 }
 
-// fairComponent reports whether a closed walk covering the component
-// satisfies weak fairness for every fair rule.
-func fairComponent[S any](g *Graph[S], comp []int, in map[int]bool, fair []int) bool {
-	for _, f := range fair {
-		ok := false
-		for _, u := range comp {
-			for _, e := range g.Edges[u] {
-				if in[e.To] && e.Rule == f {
-					ok = true
-					break
-				}
-			}
-			if ok {
-				break
+func takenInside[S any](g *Graph[S], comp []int, in map[int]bool, rule int) bool {
+	for _, u := range comp {
+		for _, e := range g.Edges[u] {
+			if in[e.To] && e.Rule == rule {
+				return true
 			}
 		}
-		if ok {
+	}
+	return false
+}
+
+func weaklyFairComponent[S any](g *Graph[S], comp []int, in map[int]bool, weak []int) bool {
+	for _, f := range weak {
+		if takenInside(g, comp, in, f) {
 			continue
 		}
+		disabled := false
 		for _, u := range comp {
 			if len(g.Rules[f].Next(g.States[u])) == 0 {
-				ok = true
+				disabled = true
 				break
 			}
 		}
-		if !ok {
+		if !disabled {
 			return false
 		}
 	}
 	return true
+}
+
+// unsatisfiedStrong returns a strongly fair rule that is enabled somewhere in
+// the component yet taken on no internal edge, or -1.
+func unsatisfiedStrong[S any](g *Graph[S], comp []int, in map[int]bool, strong []int) int {
+	for _, f := range strong {
+		if takenInside(g, comp, in, f) {
+			continue
+		}
+		for _, u := range comp {
+			if len(g.Rules[f].Next(g.States[u])) > 0 {
+				return f
+			}
+		}
+	}
+	return -1
 }
 
 func ruleName[S any](g *Graph[S], idx int) string {
@@ -138,7 +190,11 @@ func ruleName[S any](g *Graph[S], idx int) string {
 // buildLasso constructs a concrete counterexample: a shortest prefix to the
 // component and a closed walk through it that visits every witness needed by
 // the property and by fairness.
-func buildLasso[S any](g *Graph[S], p Liveness[S], comp []int, in map[int]bool, fair []int, holds []bool) *Lasso[S] {
+func buildLasso[S any](g *Graph[S], p Liveness[S], comp []int, weak, strong []int, holds []bool) *Lasso[S] {
+	in := make(map[int]bool, len(comp))
+	for _, id := range comp {
+		in[id] = true
+	}
 	type edgeAt struct {
 		from int
 		e    Edge
@@ -152,6 +208,16 @@ func buildLasso[S any](g *Graph[S], p Liveness[S], comp []int, in map[int]bool, 
 		}
 		return out
 	}
+	edgeWitness := func(rule int) (edgeAt, bool) {
+		for _, u := range comp {
+			for _, e := range internal(u) {
+				if e.Rule == rule {
+					return edgeAt{u, e}, true
+				}
+			}
+		}
+		return edgeAt{}, false
+	}
 
 	var stateTargets []int
 	var edgeTargets []edgeAt
@@ -163,21 +229,9 @@ func buildLasso[S any](g *Graph[S], p Liveness[S], comp []int, in map[int]bool, 
 			}
 		}
 	}
-	for _, f := range fair {
-		var viaEdge *edgeAt
-		for _, u := range comp {
-			for _, e := range internal(u) {
-				if e.Rule == f {
-					viaEdge = &edgeAt{u, e}
-					break
-				}
-			}
-			if viaEdge != nil {
-				break
-			}
-		}
-		if viaEdge != nil {
-			edgeTargets = append(edgeTargets, *viaEdge)
+	for _, f := range weak {
+		if w, ok := edgeWitness(f); ok {
+			edgeTargets = append(edgeTargets, w)
 			continue
 		}
 		for _, u := range comp {
@@ -185,6 +239,13 @@ func buildLasso[S any](g *Graph[S], p Liveness[S], comp []int, in map[int]bool, 
 				stateTargets = append(stateTargets, u)
 				break
 			}
+		}
+	}
+	for _, f := range strong {
+		// Either the rule fires inside the cycle or it is enabled nowhere in
+		// the component, which needs no witness.
+		if w, ok := edgeWitness(f); ok {
+			edgeTargets = append(edgeTargets, w)
 		}
 	}
 

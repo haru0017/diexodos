@@ -6,11 +6,13 @@ package engine
 
 // Rule produces the successor states reachable from a state in one step.
 // A rule that is not enabled in a state returns no successors. Fair marks
-// the rule as weakly fair for liveness checking.
+// the rule as weakly fair and StrongFair as strongly fair for liveness
+// checking.
 type Rule[S any] struct {
-	Name string
-	Fair bool
-	Next func(S) []S
+	Name       string
+	Fair       bool
+	StrongFair bool
+	Next       func(S) []S
 }
 
 // Invariant is a predicate that must hold in every reachable state.

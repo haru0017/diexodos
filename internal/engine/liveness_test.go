@@ -102,6 +102,75 @@ func TestAlwaysEventuallyWithFairEscape(t *testing.T) {
 	}
 }
 
+// Escape is enabled only at state 1, so the toggle cycle keeps disabling it.
+// Weak fairness cannot rule the cycle out, strong fairness can: escape is
+// enabled infinitely often on the cycle yet never taken.
+func TestStrongFairnessBeatsIntermittentEnabling(t *testing.T) {
+	rules := func(strongEscape bool) []Rule[int] {
+		return []Rule[int]{
+			{Name: "toggle", Next: func(s int) []int {
+				if s <= 1 {
+					return []int{1 - s}
+				}
+				return nil
+			}},
+			{Name: "escape", Fair: !strongEscape, StrongFair: strongEscape, Next: func(s int) []int {
+				if s == 1 {
+					return []int{2}
+				}
+				return nil
+			}},
+		}
+	}
+	prop := Liveness[int]{Name: "reaches two", Mode: ModeAlwaysEventually, Holds: func(s int) bool { return s == 2 }}
+
+	g := explore(t, []int{0}, rules(false))
+	if l := CheckLiveness(g, []Liveness[int]{prop}); l == nil {
+		t.Fatal("weak fairness must not exclude the toggle cycle")
+	}
+
+	g = explore(t, []int{0}, rules(true))
+	if l := CheckLiveness(g, []Liveness[int]{prop}); l != nil {
+		t.Fatalf("strong fairness must exclude the toggle cycle: %+v", l)
+	}
+}
+
+// Pruning the enabling state must still find a fair subcycle when one exists.
+func TestStrongFairnessPruningKeepsSubcycle(t *testing.T) {
+	// 0 <-> 1 and 1 <-> 2 form one component. Escape is enabled only at 2,
+	// so pruning 2 leaves the 0 <-> 1 cycle, which is a valid counterexample.
+	rules := []Rule[int]{
+		{Name: "step", Next: func(s int) []int {
+			switch s {
+			case 0:
+				return []int{1}
+			case 1:
+				return []int{0, 2}
+			case 2:
+				return []int{1}
+			}
+			return nil
+		}},
+		{Name: "escape", StrongFair: true, Next: func(s int) []int {
+			if s == 2 {
+				return []int{3}
+			}
+			return nil
+		}},
+	}
+	g := explore(t, []int{0}, rules)
+	prop := Liveness[int]{Name: "reaches three", Mode: ModeAlwaysEventually, Holds: func(s int) bool { return s == 3 }}
+	l := CheckLiveness(g, []Liveness[int]{prop})
+	if l == nil {
+		t.Fatal("expected the pruned subcycle to remain a counterexample")
+	}
+	for _, s := range l.Cycle {
+		if s.State == 2 {
+			t.Fatalf("cycle must avoid the enabling state: %+v", l.Cycle)
+		}
+	}
+}
+
 func TestFairnessWitnessInsideCycle(t *testing.T) {
 	// A fair rule taken inside the cycle keeps the cycle fair.
 	rules := []Rule[int]{

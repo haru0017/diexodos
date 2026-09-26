@@ -17,11 +17,12 @@ type Spec[S any] struct {
 // Action is a guarded transition. A nil Guard is always enabled. Multi, when
 // set, replaces Update and may produce several successors at once.
 type Action[S any] struct {
-	Name   string
-	Fair   bool
-	Guard  func(S) bool
-	Update func(S) S
-	Multi  func(S) []S
+	Name       string
+	Fair       bool
+	StrongFair bool
+	Guard      func(S) bool
+	Update     func(S) S
+	Multi      func(S) []S
 }
 
 func Act[S any](name string, guard func(S) bool, update func(S) S) Action[S] {
@@ -37,6 +38,14 @@ func ActN[S any](name string, guard func(S) bool, multi func(S) []S) Action[S] {
 // enabled forever must eventually take it. Only liveness checking uses this.
 func Fair[S any](a Action[S]) Action[S] {
 	a.Fair = true
+	return a
+}
+
+// StronglyFair marks the action as strongly fair: a behavior that enables the
+// action infinitely often must take it infinitely often, even if the action
+// keeps being disabled in between. Only liveness checking uses this.
+func StronglyFair[S any](a Action[S]) Action[S] {
+	a.StrongFair = true
 	return a
 }
 
