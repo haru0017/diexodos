@@ -103,11 +103,7 @@ func Explore[S any, K comparable](init []S, rules []Rule[S], invs []Invariant[S]
 		return false
 	}
 
-	admit := func(s S, prev, rule int) (int, bool) {
-		k := key(s)
-		if id, ok := index[k]; ok {
-			return id, false
-		}
+	admit := func(k K, s S, prev, rule int) int {
 		id := len(g.States)
 		index[k] = id
 		g.States = append(g.States, s)
@@ -119,14 +115,15 @@ func Explore[S any, K comparable](init []S, rules []Rule[S], invs []Invariant[S]
 		if opts.Progress != nil && res.States%progressEvery == 0 {
 			opts.Progress(res.States)
 		}
-		return id, true
+		return id
 	}
 
 	for _, s := range init {
-		id, fresh := admit(s, -1, -1)
-		if !fresh {
+		k := key(s)
+		if _, ok := index[k]; ok {
 			continue
 		}
+		id := admit(k, s, -1, -1)
 		if check(id) {
 			return res, nil
 		}
@@ -140,17 +137,19 @@ func Explore[S any, K comparable](init []S, rules []Rule[S], invs []Invariant[S]
 		for ri, r := range rules {
 			for _, next := range r.Next(g.States[cur]) {
 				successors++
-				if opts.MaxStates > 0 && res.States >= opts.MaxStates {
-					if _, exists := index[key(next)]; !exists {
+				k := key(next)
+				id, seen := index[k]
+				if !seen {
+					if opts.MaxStates > 0 && res.States >= opts.MaxStates {
 						res.Truncated = true
 						return res, nil
 					}
+					id = admit(k, next, cur, ri)
 				}
-				id, fresh := admit(next, cur, ri)
 				if opts.BuildGraph {
 					g.Edges[cur] = append(g.Edges[cur], Edge{To: id, Rule: ri})
 				}
-				if !fresh {
+				if seen {
 					continue
 				}
 				if check(id) {
