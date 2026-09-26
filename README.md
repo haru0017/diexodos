@@ -59,7 +59,7 @@ invariant "mutual exclusion" violated:
    4. take(2): {Saw:[false true true] Holds:[false true true]}
 ```
 
-`dex.Check` fails the test on any violation, a deadlock when `dex.DetectDeadlocks()` is set, or a truncated search. `dex.Run` returns the result instead, for tests where a violation is the expected outcome. `dex.MaxStates(n)` bounds the search and `dex.Progress(w)` reports progress periodically.
+`dex.Check` fails the test on any violation, a deadlock when `dex.DetectDeadlocks()` is set, or a truncated search. `dex.Run` returns the result instead, for tests where a violation is the expected outcome. `dex.MaxStates(n)` bounds the search and `dex.Progress(w)` reports progress periodically. A model with unbounded data is made finite by `Spec.Constraint`, a predicate that keeps exploration inside the states it accepts.
 
 ## Liveness and fairness
 

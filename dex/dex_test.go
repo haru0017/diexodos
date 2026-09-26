@@ -108,6 +108,19 @@ func TestLivenessNeedsFairness(t *testing.T) {
 	Check(t, spinnerSpec(true))
 }
 
+func TestConstraintBoundsTheStateSpace(t *testing.T) {
+	// The counter is unbounded, the constraint makes it finite.
+	spec := Spec[int]{
+		Init:       []int{0},
+		Actions:    []Action[int]{Act("inc", nil, func(s int) int { return s + 1 })},
+		Constraint: func(s int) bool { return s <= 10 },
+	}
+	res := Check(t, spec)
+	if res.States != 11 || res.Truncated {
+		t.Fatalf("got %+v", res)
+	}
+}
+
 func TestEmptyInitPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {

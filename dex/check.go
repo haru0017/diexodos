@@ -116,7 +116,7 @@ func RunKeyed[S any, K comparable](spec Spec[S], key func(S) K, opts ...Option) 
 
 	rules := make([]engine.Rule[S], len(spec.Actions))
 	for i, a := range spec.Actions {
-		rules[i] = engine.Rule[S]{Name: a.Name, Fair: a.Fair, StrongFair: a.StrongFair, Next: nextFunc(a)}
+		rules[i] = engine.Rule[S]{Name: a.Name, Fair: a.Fair, StrongFair: a.StrongFair, Next: nextFunc(a, spec.Constraint)}
 	}
 	invs := make([]engine.Invariant[S], len(spec.Invariants))
 	for i, inv := range spec.Invariants {
@@ -190,14 +190,26 @@ func steps[S any](in []engine.Step[S]) []Step[S] {
 	return out
 }
 
-func nextFunc[S any](a Action[S]) func(S) []S {
+func nextFunc[S any](a Action[S], within func(S) bool) func(S) []S {
 	return func(s S) []S {
 		if a.Guard != nil && !a.Guard(s) {
 			return nil
 		}
+		var next []S
 		if a.Multi != nil {
-			return a.Multi(s)
+			next = a.Multi(s)
+		} else {
+			next = []S{a.Update(s)}
 		}
-		return []S{a.Update(s)}
+		if within == nil {
+			return next
+		}
+		kept := make([]S, 0, len(next))
+		for _, n := range next {
+			if within(n) {
+				kept = append(kept, n)
+			}
+		}
+		return kept
 	}
 }

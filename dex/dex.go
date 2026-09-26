@@ -12,6 +12,10 @@ type Spec[S any] struct {
 	Actions    []Action[S]
 	Invariants []Invariant[S]
 	Liveness   []Liveness[S]
+	// Constraint bounds the state space: successors outside it are not
+	// explored. Use it to make a model with unbounded data finite, like the
+	// CONSTRAINT clause in TLC. Properties are checked on the bounded space.
+	Constraint func(S) bool
 }
 
 // Action is a guarded transition. A nil Guard is always enabled. Multi, when
