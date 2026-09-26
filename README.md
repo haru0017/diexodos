@@ -2,13 +2,13 @@
 
 An explicit-state model checker embedded in Go.
 
-You describe a system as a state type, a set of guarded actions, and properties. The checker exhaustively walks every reachable state across every interleaving. When an invariant breaks it reports a shortest counterexample trace, and when a liveness property breaks it reports a fair lasso: a path into a cycle that can repeat forever. Specs are plain Go, run under `go test`, and need no external toolchain.
+Describe a system as a state type, a set of guarded actions, and properties. The checker exhaustively walks every reachable state across every interleaving. When an invariant breaks it reports a shortest counterexample trace. When a liveness property breaks it reports a fair lasso: a path into a cycle that can repeat forever under the declared fairness. Specs are plain Go and run under `go test`.
 
 The name is the Greek word διέξοδος, a way through. Its adverb διεξοδικά means exhaustively. The import name is `dex`.
 
-## Status
-
-Early and experimental. Safety checking, deadlock detection, liveness with weak fairness, and a message-passing actor layer work. See the roadmap below.
+```sh
+go get github.com/haru0017/diexodos
+```
 
 ## Quick start
 
@@ -59,9 +59,11 @@ invariant "mutual exclusion" violated:
    4. take(2): {Saw:[false true true] Holds:[false true true]}
 ```
 
+`dex.Check` fails the test on any violation, a deadlock when `dex.DetectDeadlocks()` is set, or a truncated search. `dex.Run` returns the result instead, for tests where a violation is the expected outcome. `dex.MaxStates(n)` bounds the search and `dex.Progress(w)` reports progress periodically.
+
 ## Liveness and fairness
 
-Safety says a bad state is never reached. Liveness says a good thing eventually happens, and it only makes sense together with fairness: without it, the scheduler that starves an action forever is always a counterexample. Actions marked `dex.Fair` are weakly fair: a behavior that keeps the action enabled forever must eventually take it.
+An invariant says a bad state is never reached. A liveness property says a good thing eventually happens, and it only means something together with fairness: without it, the scheduler that starves an action forever is always a counterexample.
 
 ```go
 spec := dex.Spec[int]{
@@ -77,11 +79,37 @@ spec := dex.Spec[int]{
 dex.Check(t, spec) // passes; without Fair the spin cycle would be a lasso
 ```
 
-`dex.AlwaysEventually` states that a predicate holds infinitely often. Terminal states stutter forever, so a system that halts in a bad state is caught too.
+- `dex.Fair` declares weak fairness: an action that stays enabled forever must eventually run.
+- `dex.StronglyFair` declares strong fairness: an action enabled infinitely often must run infinitely often, even if it keeps being disabled in between.
+- `dex.EventuallyAlways(name, p)` states that p eventually holds forever. `dex.AlwaysEventually(name, p)` states that p holds infinitely often.
+
+Terminal states stutter forever, so a system that halts in a bad state is caught too.
+
+## States with slices or maps
+
+State identity for comparable states is Go equality. States holding slices go through `dex.RunKeyed` with an injective canonical key, which `dexgen` writes for you:
+
+```go
+//go:generate go run github.com/haru0017/diexodos/cmd/dexgen -type State
+
+type State struct {
+	Round int
+	Log   []Entry
+}
+
+res := dex.RunKeyed(spec, State.DexKey)
+```
+
+The generated `DexKey` is reflection free and rejects fields it cannot encode canonically, such as pointers and maps, at generation time.
 
 ## Actor layer
 
-The `actor` package builds message-passing systems on top of the same engine: named machines, typed handlers, mailboxes. Delivery order across machines is explored exhaustively. Delivery is weakly fair by default, and message loss and reordering are opt-in system options, so the semantics of the channel is an explicit modeling decision.
+The `actor` package builds message-passing systems on the same engine: named machines, typed handlers, mailboxes. Delivery order across machines is explored exhaustively, and the channel semantics is an explicit modeling decision:
+
+- delivery is weakly fair by default; `actor.UnfairDelivery()` turns that off
+- `actor.Loss()` lets any message vanish, and losing is never fair
+- `actor.Reorder()` delivers any queued message instead of the head
+- `actor.Defer` keeps a message queued while a predicate holds on the machine, like the defer keyword in P
 
 ```go
 import "github.com/haru0017/diexodos/actor"
@@ -95,43 +123,25 @@ actor.On(s, "slot", func(m Slot, msg TryTake, ctx *actor.Ctx) Slot {
 	}
 	return m
 })
+actor.Post(s, "slot", TryTake{From: "r1", ID: 1})
 s.Inv("mutual exclusion", func(w actor.Snapshot) bool { ... })
 s.EventuallyAlways("someone holds the slot", func(w actor.Snapshot) bool { ... })
 actor.Check(t, s)
 ```
 
-Machine states and messages must be plain values: booleans, numbers, strings, and arrays or structs of those. Pointers, slices, and maps are rejected at registration time with a clear error instead of being silently mishandled.
+Machine states and messages must be plain values: booleans, numbers, strings, and arrays or structs of those. Anything else is rejected at registration time with a clear error. A delivered message with no matching handler panics instead of being dropped silently.
 
 ## Examples
 
-- `examples/mutex`: the race above, plus the atomic variant proven safe.
+- `examples/mutex`: the race above, and the atomic variant proven safe.
 - `examples/diehard`: the water jug puzzle. The claim that the big jug never holds 4 gallons is disproven, and the counterexample is the solution.
 - `examples/peterson`: Peterson's algorithm proven safe across all interleavings, and the classic bug of taking the turn for yourself caught.
 - `examples/msgslot`: the same slot race through mailboxes, and a try-take variant proven safe with a liveness property under fair delivery.
 
-## API
+## How it works
 
-- `dex.Spec[S]` holds initial states, actions, invariants, and liveness properties.
-- `dex.Act(name, guard, update)` declares a guarded transition. A nil guard is always enabled. `dex.ActN` produces several successors at once. Nondeterminism is expressed by declaring several enabled actions.
-- `dex.Fair(action)` marks an action weakly fair for liveness checking.
-- `dex.Inv(name, predicate)` declares an invariant. `dex.EventuallyAlways` and `dex.AlwaysEventually` declare liveness properties.
-- `dex.Check(t, spec, opts...)` explores and fails the test on any violation or a truncated search. `dex.Run` returns the result instead, for tests where a violation is the expected outcome.
-- `dex.RunKeyed` and `dex.CheckKeyed` handle states that are not comparable, using a caller-supplied canonical key.
-- Options: `dex.MaxStates(n)` bounds the search, `dex.Progress(w)` reports progress periodically, `dex.DetectDeadlocks()` reports states with no enabled action.
+Exploration is breadth first over the graph of reachable states, so the first counterexample found is a shortest one. State identity is exact: comparable states are their own map key and keyed states use an injective encoding, so two distinct states are never conflated by a hash collision.
 
-## Design notes
+Liveness checking totalizes the graph with stuttering self-loops and searches strongly connected components for a violating cycle. A component is accepted only if a closed walk covering it satisfies every fairness declaration: a weakly fair action must be taken inside the component or disabled somewhere in it, and a strongly fair action must be taken inside it or enabled nowhere, with the enabling states pruned and the search repeated otherwise. The reported lasso visits every witness that argument needs.
 
-State identity is exact. Comparable states are their own map key, and keyed states go through an injective canonical key, so two distinct states are never conflated by a hash collision.
-
-Exploration is breadth first, so the first counterexample found is a shortest one.
-
-Liveness checking totalizes the graph with stuttering self-loops, finds strongly connected components, and accepts a violating component only if a closed walk covering it satisfies weak fairness: every fair action is either taken inside the component or disabled somewhere in it. The reported lasso visits every witness that argument needs.
-
-The engine lives in an internal package behind the small `dex` surface, keeping room to change the exploration strategy without breaking the API.
-
-## Roadmap
-
-- Code generation for canonical keys and clones of user-defined rich states.
-- Strong fairness.
-- Deferred messages and crash modeling helpers in the actor layer.
-- Symmetry reduction and parallel exploration.
+The engine lives in an internal package behind the small `dex` surface.
