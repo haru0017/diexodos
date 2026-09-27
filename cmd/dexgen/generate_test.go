@@ -11,12 +11,28 @@ func TestGeneratedFileIsUpToDate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	committed, err := os.ReadFile("internal/fixture/dexkey_gen.go")
+	committed, err := os.ReadFile("internal/fixture/state_dexkey.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(src) != string(committed) {
-		t.Fatal("internal/fixture/dexkey_gen.go is stale; rerun go generate")
+		t.Fatal("internal/fixture/state_dexkey.go is stale; rerun go generate")
+	}
+}
+
+// Two invocations in one package produce self-contained files that coexist;
+// the fixture package compiling with both is the real assertion here.
+func TestSecondTypeFileIsUpToDate(t *testing.T) {
+	src, err := generate("internal/fixture", []string{"Entry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed, err := os.ReadFile("internal/fixture/entry_dexkey.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(src) != string(committed) {
+		t.Fatal("internal/fixture/entry_dexkey.go is stale; rerun go generate")
 	}
 }
 

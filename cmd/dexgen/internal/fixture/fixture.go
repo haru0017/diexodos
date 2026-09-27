@@ -2,6 +2,7 @@
 package fixture
 
 //go:generate go run github.com/haru0017/diexodos/cmd/dexgen -type State
+//go:generate go run github.com/haru0017/diexodos/cmd/dexgen -type Entry
 
 type Kind string
 
