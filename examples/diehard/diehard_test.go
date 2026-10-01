@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/haru0017/diexodos/dex"
+	"github.com/haru0017/diexodos/report"
 )
 
 func TestSolvesThePuzzle(t *testing.T) {
@@ -20,4 +21,5 @@ func TestSolvesThePuzzle(t *testing.T) {
 		t.Fatalf("path length = %d, want 7\n%s", got, res.Violation)
 	}
 	t.Logf("solution:\n%s", res.Violation)
+	report.Save(t, res)
 }

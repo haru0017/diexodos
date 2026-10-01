@@ -1,9 +1,8 @@
-// Package msgslot is the message-passing variant of examples/mutex: two
-// runners race for one slot held by a third machine, and all interaction goes
-// through mailboxes. Asking whether the slot is free and taking it are
-// separate messages, so both runners can be told the slot is free. The
-// try-take variant decides inside one handler, which is atomic, and mutual
-// exclusion holds.
+// Package msgslot models two runners racing for one slot held by a third
+// machine, with every interaction going through mailboxes. Asking whether the
+// slot is free and taking it are separate messages, so both runners can be
+// told the slot is free. The try-take variant decides inside one handler,
+// which is atomic, and mutual exclusion holds.
 package msgslot
 
 import "github.com/haru0017/diexodos/actor"

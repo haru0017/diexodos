@@ -12,38 +12,49 @@ go get github.com/haru0017/diexodos
 
 ## Quick start
 
-Two processes race for one slot. Checking the slot and taking it are separate steps, so both can observe a free slot and both take it:
+The classic first model: two wire transfers leave the same account, and checking the balance and withdrawing are separate steps, so both transfers can pass the check before either withdraws:
 
 ```go
 import "github.com/haru0017/diexodos/dex"
 
+type Stage int
+
+const (
+	Ready Stage = iota
+	Checked
+	Done
+)
+
+func (s Stage) String() string {
+	return [...]string{"ready", "checked", "done"}[s]
+}
+
 type State struct {
-	Saw   [3]bool
-	Holds [3]bool
+	Balance int
+	Stage   [2]Stage
 }
 
 func Spec() dex.Spec[State] {
-	free := func(s State) bool { return !s.Holds[1] && !s.Holds[2] }
 	var actions []dex.Action[State]
-	for i := 1; i <= 2; i++ {
+	for i := range 2 {
 		actions = append(actions,
-			dex.Act(fmt.Sprintf("check(%d)", i),
-				func(s State) bool { return !s.Saw[i] && free(s) },
-				func(s State) State { s.Saw[i] = true; return s }),
-			dex.Act(fmt.Sprintf("take(%d)", i),
-				func(s State) bool { return s.Saw[i] },
-				func(s State) State { s.Holds[i] = true; return s }))
+			dex.Act(fmt.Sprintf("transfer %d checks the balance", i),
+				func(s State) bool { return s.Stage[i] == Ready && s.Balance >= 6 },
+				func(s State) State { s.Stage[i] = Checked; return s }),
+			dex.Act(fmt.Sprintf("transfer %d withdraws", i),
+				func(s State) bool { return s.Stage[i] == Checked },
+				func(s State) State { s.Balance -= 6; s.Stage[i] = Done; return s }))
 	}
 	return dex.Spec[State]{
-		Init:    []State{{}},
+		Init:    []State{{Balance: 10}},
 		Actions: actions,
 		Invariants: []dex.Invariant[State]{
-			dex.Inv("mutual exclusion", func(s State) bool { return !(s.Holds[1] && s.Holds[2]) }),
+			dex.Inv("the balance never goes negative", func(s State) bool { return s.Balance >= 0 }),
 		},
 	}
 }
 
-func TestMutex(t *testing.T) {
+func TestTransfers(t *testing.T) {
 	dex.Check(t, Spec()) // fails with a counterexample trace
 }
 ```
@@ -51,12 +62,12 @@ func TestMutex(t *testing.T) {
 The checker finds the shortest interleaving that breaks the invariant:
 
 ```
-invariant "mutual exclusion" violated:
-   0. (init) {Saw:[false false false] Holds:[false false false]}
-   1. check(1): {Saw:[false true false] Holds:[false false false]}
-   2. check(2): {Saw:[false true true] Holds:[false false false]}
-   3. take(1): {Saw:[false true true] Holds:[false true false]}
-   4. take(2): {Saw:[false true true] Holds:[false true true]}
+invariant "the balance never goes negative" violated:
+   0. (init) {Balance:10 Stage:[ready ready]}
+   1. transfer 0 checks the balance: {Balance:10 Stage:[checked ready]}
+   2. transfer 1 checks the balance: {Balance:10 Stage:[checked checked]}
+   3. transfer 0 withdraws: {Balance:4 Stage:[done checked]}
+   4. transfer 1 withdraws: {Balance:-2 Stage:[done done]}
 ```
 
 `dex.Check` fails the test on any violation, a deadlock when `dex.DetectDeadlocks()` is set, or a truncated search. `dex.Run` returns the result instead, for tests where a violation is the expected outcome. `dex.MaxStates(n)` bounds the search and `dex.Progress(w)` reports progress periodically. A model with unbounded data is made finite by `Spec.Constraint`, a predicate that keeps exploration inside the states it accepts.
@@ -102,6 +113,26 @@ res := dex.RunKeyed(spec, State.DexKey)
 
 Fields that cannot be encoded canonically, such as pointers and maps, are rejected when the code is generated.
 
+## Counterexample reports
+
+The `report` package renders a counterexample as Markdown with a mermaid diagram, written next to the test that pins it:
+
+```go
+import "github.com/haru0017/diexodos/report"
+
+func TestPoliteProtocolLivelocks(t *testing.T) {
+	res := dex.Run(spec) // polite dining philosophers: everyone yields, nobody eats
+	if res.Lasso == nil {
+		t.Fatal("expected the livelock")
+	}
+	report.Save(t, res) // writes TestPoliteProtocolLivelocks.md beside this file
+}
+```
+
+A green result writes nothing. The output is deterministic, so an unchanged counterexample leaves the working tree clean and a changed one shows up in the diff: the report behaves like a golden file without being asserted on. `report.Markdown(res)` returns the document instead of writing it.
+
+The document carries the violated property, a mermaid diagram of the trace, and a step table. Each distinct state is drawn once, so a lasso closes into a visible loop and its repeating edges are thick; the state that breaks an invariant is highlighted. States render through `%+v`, so enum fields read best with a `String()` method.
+
 ## Actor layer
 
 The `actor` package builds message-passing systems on the same engine: named machines, typed handlers, mailboxes. Delivery order across machines is explored exhaustively, and the channel semantics is an explicit modeling decision:
@@ -133,7 +164,9 @@ Machine states and messages must be plain values: booleans, numbers, strings, an
 
 ## Examples
 
-- `examples/mutex`: the race above, and the atomic variant proven safe.
+- `examples/wiretransfer`: the overdraft above, and the atomic variant proven safe.
 - `examples/diehard`: the water jug puzzle. The claim that the big jug never holds 4 gallons is disproven, and the counterexample is the solution.
 - `examples/peterson`: Peterson's algorithm proven safe across all interleavings, and the classic bug of taking the turn for yourself caught.
-- `examples/msgslot`: the same slot race through mailboxes, and a try-take variant proven safe with a liveness property under fair delivery.
+- `examples/msgslot`: two runners racing for one slot through mailboxes, and a try-take variant proven safe with a liveness property under fair delivery.
+- `examples/philosophers`: dining philosophers. The naive protocol deadlocks, the polite one livelocks, and breaking the symmetry is proven to feed everyone. The committed reports show both loops.
+- `examples/twophase`: transaction commit in the shape of the TLA+ tutorial's TCommit. Consistency is proven, and so is the famous weakness: a stopped transaction manager blocks a prepared participant forever.
