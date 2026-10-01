@@ -133,6 +133,8 @@ A green result writes nothing. The output is deterministic, so an unchanged coun
 
 The document carries the violated property, a mermaid diagram of the trace, and a step table. Each distinct state is drawn once, so a lasso closes into a visible loop and its repeating edges are thick; the state that breaks an invariant is highlighted. States render through `%+v`, so enum fields read best with a `String()` method.
 
+GitHub renders the committed reports, so the examples double as a gallery: [a livelock closing into a loop](examples/philosophers/TestPoliteProtocolLivelocks.md), [a deadlock stuttering forever](examples/philosophers/TestNaiveProtocolDeadlocks.md), [two-phase commit blocking](examples/twophase/TestAStoppedManagerBlocksThePrepared.md), and [a straight path into a bad state](examples/wiretransfer/TestSeparateCheckOverdraws.md).
+
 ## Actor layer
 
 The `actor` package builds message-passing systems on the same engine: named machines, typed handlers, mailboxes. Delivery order across machines is explored exhaustively, and the channel semantics is an explicit modeling decision:
